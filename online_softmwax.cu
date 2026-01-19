@@ -7,9 +7,9 @@
 #define COARSE_FACTOR 16
 
 __global__ void OnlineSotmax_matmul(float* A, float* V, float* Out, int width){
-    __shared__ float Amax[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float A_s[TILE_WIDTH][TILE_WIDTH];
     __shared__ float V_s[TILE_WIDTH][TILE_WIDTH * COARSE_FACTOR];
-
+    
     int tx = threadIdx.x;
     int ty = threadIdx.y;
     int bx = blockIdx.x;
@@ -18,34 +18,34 @@ __global__ void OnlineSotmax_matmul(float* A, float* V, float* Out, int width){
     int row = by * TILE_WIDTH + ty;
     
     // Registers to track the "Running State" of the Softmax for this row
-    float m = -1e38f; // Running Max
-    float d = 0.0f;   // Running Sum 
-
-    // Lo
+    float m = -1e38f; 
+    float d = 0.0f;  
     float acc[COARSE_FACTOR];
+
     #pragma unroll //For looping
     for(int i = 0; i < COARSE_FACTOR; i++)
     acc[i] = 0.0f;
     for(int c = 0; c<width; c+=TILE_WIDTH){
         if(row < width && (c + tx) < width)
-            Amax[ty][tx] = A[row * width + c * TILE_WIDTH + tx];  
+            A_s[ty][tx] = A[row * width + c + tx];  
         else
-            Amax[ty][tx] = -1e38f;
+            A_s[ty][tx] = -1e38f;
         #pragma unroll 
-        for(int k = 0; k<COARSE_FACTOR; k++){
-            int col = (bx * TILE_WIDTH * COARSE_FACTOR) + (k * COARSE_FACTOR) + tx;
-            if((k+ty)<width && col < (width * COARSE_FACTOR))
-                V_s[ty][tx*COARSE_FACTOR] = V[(k * TILE_WIDTH + ty) * width + col];
+        #pragma unroll 
+        for(int k = 0; k < COARSE_FACTOR; k++) {
+            int col_idx = (bx * TILE_WIDTH * COARSE_FACTOR) + (k * TILE_WIDTH) + tx;
+            if((c + ty) < width && col_idx < (width * COARSE_FACTOR))
+                V_s[ty][k * TILE_WIDTH + tx] = V[(c + ty) * (width * COARSE_FACTOR) + col_idx];
             else
-                V_s[ty][tx*COARSE_FACTOR] = 0.0f;
+                V_s[ty][k * TILE_WIDTH + tx] = 0.0f;
         }
         __syncthreads();
         //  To the online softmax, initialize first normalization
         for(int i = 0; i < TILE_WIDTH; i++){
         float m_o = m;
-        float current_value = Amax[ty][i];
+        float current_value = A_s[ty][i];
         // first
-        float m = fmaxf(current_value,m_o);
+        m = fmaxf(current_value,m_o);
 
         // L1
         float exp_old = __expf(m_o - m);
